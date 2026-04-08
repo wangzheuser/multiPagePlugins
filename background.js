@@ -1244,6 +1244,38 @@ async function recordCfmailDomainSuccess(domain) {
   });
 }
 
+async function ensureCfmailMailbox(state) {
+  const apiHost = getCfmailApiHost(state);
+  const apiKey = (state.cfmailApiKey || '').trim();
+
+  if (!apiKey) {
+    throw new Error('CFMail: API key not configured. Set it in sidepanel settings.');
+  }
+
+  const existing = state.cfmailMailbox;
+  if (existing && existing.jwt && existing.jwtCreatedAt) {
+    const age = Date.now() - existing.jwtCreatedAt;
+    if (age < CFMAIL_JWT_TTL_MS) {
+      // JWT still valid, reuse
+      return { email: existing.email, jwt: existing.jwt };
+    }
+    await addLog('CFMail: JWT expired, creating new mailbox', 'warn');
+  }
+
+  const domain = await getCfmailDomain(state);
+  const { email, jwt } = await cfmailCreateMailbox(apiHost, apiKey, domain);
+  await recordCfmailDomainSuccess(domain);
+
+  await setState({
+    email,
+    cfmailMailbox: { email, jwt, jwtCreatedAt: Date.now() },
+  });
+  broadcastDataUpdate({ email });
+
+  await addLog(`CFMail: Created mailbox ${email} on domain ${domain}`, 'ok');
+  return { email, jwt };
+}
+
 async function clickResendOnSignupPage(step) {
   const signupTabId = await getTabId('signup-page');
   if (!signupTabId) return;
