@@ -1388,6 +1388,31 @@ async function pollCfmailCode(state, step) {
   throw new Error(`No verification email found in CFMail after ${(maxAttempts * intervalMs / 1000).toFixed(0)}s.`);
 }
 
+async function executeStep4Or7ViaCfmail(state, step) {
+  // Trigger OpenAI to send the verification email
+  await clickResendOnSignupPage(step);
+
+  await addLog(`Step ${step}: Polling CFMail for verification code...`);
+  const result = await pollCfmailCode(state, step);
+
+  await setState({ lastEmailTimestamp: result.emailTimestamp });
+  await addLog(`Step ${step}: Got verification code: ${result.code}`);
+
+  // Fill code into signup page
+  const signupTabId = await getTabId('signup-page');
+  if (signupTabId) {
+    await chrome.tabs.update(signupTabId, { active: true });
+    await sendToContentScript('signup-page', {
+      type: 'FILL_CODE',
+      step,
+      source: 'background',
+      payload: { code: result.code },
+    });
+  } else {
+    throw new Error('Signup page tab was closed. Cannot fill verification code.');
+  }
+}
+
 async function clickResendOnSignupPage(step) {
   const signupTabId = await getTabId('signup-page');
   if (!signupTabId) return;
@@ -1407,6 +1432,11 @@ async function clickResendOnSignupPage(step) {
 }
 
 async function executeStep4(state) {
+  // CFMail provider: API-based polling, no browser tab needed
+  if (state.mailProvider === 'cfmail') {
+    return executeStep4Or7ViaCfmail(state, 4);
+  }
+
   // Click "重新发送电子邮件" on the signup page before polling
   await clickResendOnSignupPage(4);
 
@@ -1519,6 +1549,11 @@ async function executeStep6(state) {
 // ============================================================
 
 async function executeStep7(state) {
+  // CFMail provider: API-based polling, no browser tab needed
+  if (state.mailProvider === 'cfmail') {
+    return executeStep4Or7ViaCfmail(state, 7);
+  }
+
   // Click "重新发送电子邮件" on the auth page before polling
   await clickResendOnSignupPage(7);
 
