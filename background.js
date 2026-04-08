@@ -61,6 +61,12 @@ const DEFAULT_STATE = {
   mailProvider: '163', // 'qq' or '163'
   inbucketHost: '',
   inbucketMailbox: '',
+  cfmailApiHost: '',
+  cfmailApiKey: '',
+  cfmailDomains: [],
+  cfmailDomainIndex: 0,
+  cfmailDomainFailures: {},
+  cfmailMailbox: null,
 };
 
 async function getState() {
