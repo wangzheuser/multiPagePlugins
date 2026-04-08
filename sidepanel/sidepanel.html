@@ -54,6 +54,7 @@
           <option value="163">163 Mail (mail.163.com)</option>
           <option value="qq">QQ Mail (wx.mail.qq.com)</option>
           <option value="inbucket">Inbucket (custom host)</option>
+          <option value="cfmail">CFMail (API-based)</option>
         </select>
       </div>
       <div class="data-row" id="row-inbucket-host" style="display:none;">
@@ -63,6 +64,18 @@
       <div class="data-row" id="row-inbucket-mailbox" style="display:none;">
         <span class="data-label">Mailbox</span>
         <input type="text" id="input-inbucket-mailbox" class="data-input" placeholder="e.g. zju2001" />
+      </div>
+      <div class="data-row" id="row-cfmail-api-host" style="display:none;">
+        <span class="data-label">API Host</span>
+        <input type="text" id="input-cfmail-api-host" class="data-input" placeholder="https://mailapi.wqp.de5.net" />
+      </div>
+      <div class="data-row" id="row-cfmail-api-key" style="display:none;">
+        <span class="data-label">API Key</span>
+        <input type="password" id="input-cfmail-api-key" class="data-input" placeholder="CFMail admin password" />
+      </div>
+      <div class="data-row" id="row-cfmail-domains" style="display:none;">
+        <span class="data-label">Domains</span>
+        <textarea id="input-cfmail-domains" class="data-input" rows="2" placeholder="One domain per line (e.g. example.com)&#10;Round-robin + circuit breaker"></textarea>
       </div>
       <div class="data-row">
         <span class="data-label">Email</span>
