@@ -1,6 +1,15 @@
 // background.js — Service Worker: orchestration, state, tab management, message routing
 
-importScripts('data/names.js');
+importScripts('shared/cfmail-utils.js', 'data/names.js');
+
+const {
+  buildCfmailDiagnostics,
+  buildCfmailMessageText,
+  extractCfmailTimestamp,
+  extractCfmailCode,
+  getCfmailMessageRecipient,
+  isCfmailMessageRecentEnough,
+} = globalThis.MultiPageCfmailUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
@@ -38,7 +47,7 @@ async function ensureAutomationWindowId() {
 
 
 // ============================================================
-// State Management (chrome.storage.session)
+// State Management (chrome.storage.session + chrome.storage.local)
 // ============================================================
 
 const DEFAULT_STATE = {
@@ -69,9 +78,31 @@ const DEFAULT_STATE = {
   cfmailMailbox: null,
 };
 
+const PERSISTED_SETTING_KEYS = [
+  'vpsUrl',
+  'customPassword',
+  'mailProvider',
+  'inbucketHost',
+  'inbucketMailbox',
+  'cfmailApiHost',
+  'cfmailApiKey',
+  'cfmailDomains',
+];
+
+function pickPersistedSettings(source = {}) {
+  return Object.fromEntries(
+    PERSISTED_SETTING_KEYS
+      .filter((key) => source[key] !== undefined)
+      .map((key) => [key, source[key]])
+  );
+}
+
 async function getState() {
-  const state = await chrome.storage.session.get(null);
-  return { ...DEFAULT_STATE, ...state };
+  const [persisted, sessionState] = await Promise.all([
+    chrome.storage.local.get(PERSISTED_SETTING_KEYS),
+    chrome.storage.session.get(null),
+  ]);
+  return { ...DEFAULT_STATE, ...persisted, ...sessionState };
 }
 
 async function initializeSessionStorageAccess() {
@@ -94,6 +125,11 @@ async function setState(updates) {
   );
   console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(safeLog).slice(0, 200));
   await chrome.storage.session.set(updates);
+
+  const persistedUpdates = pickPersistedSettings(updates);
+  if (Object.keys(persistedUpdates).length > 0) {
+    await chrome.storage.local.set(persistedUpdates);
+  }
 }
 
 function broadcastDataUpdate(payload) {
@@ -115,21 +151,17 @@ async function setPasswordState(password) {
 
 async function resetState() {
   console.log(LOG_PREFIX, 'Resetting all state');
-  // Preserve settings and persistent data across resets
-  const prev = await chrome.storage.session.get([
-    'seenCodes',
-    'seenInbucketMailIds',
-    'accounts',
-    'tabRegistry',
-    'vpsUrl',
-    'customPassword',
-    'mailProvider',
-    'inbucketHost',
-    'inbucketMailbox',
-    'cfmailApiHost',
-    'cfmailApiKey',
-    'cfmailDomains',
+  // Preserve session-only runtime caches across resets, and restore settings from local
+  const [prev, persisted] = await Promise.all([
+    chrome.storage.session.get([
+      'seenCodes',
+      'seenInbucketMailIds',
+      'accounts',
+      'tabRegistry',
+    ]),
+    chrome.storage.local.get(PERSISTED_SETTING_KEYS),
   ]);
+
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
@@ -137,14 +169,7 @@ async function resetState() {
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
     tabRegistry: prev.tabRegistry || {},
-    vpsUrl: prev.vpsUrl || '',
-    customPassword: prev.customPassword || '',
-    mailProvider: prev.mailProvider || '163',
-    inbucketHost: prev.inbucketHost || '',
-    inbucketMailbox: prev.inbucketMailbox || '',
-    cfmailApiHost: prev.cfmailApiHost || '',
-    cfmailApiKey: prev.cfmailApiKey || '',
-    cfmailDomains: prev.cfmailDomains || [],
+    ...pickPersistedSettings(persisted),
   });
 }
 
@@ -1154,26 +1179,6 @@ function getCfmailApiHost(state) {
   return (state.cfmailApiHost || '').trim() || CFMAIL_DEFAULT_API_HOST;
 }
 
-function extractCfmailCode(text) {
-  // Pattern 1: OpenAI subject line
-  const m1 = text.match(/Subject:\s*Your ChatGPT code is\s*(\d{6})/i);
-  if (m1) return m1[1];
-
-  // Pattern 2: OpenAI email body
-  const m2 = text.match(/Your ChatGPT code is\s*(\d{6})/i);
-  if (m2) return m2[1];
-
-  // Pattern 3: Alternative body
-  const m3 = text.match(/temporary verification code to continue:\s*(\d{6})/i);
-  if (m3) return m3[1];
-
-  // Pattern 4: Generic fallback — last resort, may match any 6-digit number
-  const m4 = text.match(/(?<![#&])\b(\d{6})\b/);
-  if (m4) return m4[1];
-
-  return null;
-}
-
 async function cfmailCreateMailbox(apiHost, apiKey, domain) {
   const local = `oc${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`;
 
@@ -1283,6 +1288,7 @@ async function recordCfmailDomainSuccess(domain) {
 async function ensureCfmailMailbox(state) {
   const apiHost = getCfmailApiHost(state);
   const apiKey = (state.cfmailApiKey || '').trim();
+  const domains = Array.isArray(state.cfmailDomains) ? state.cfmailDomains.filter(Boolean) : [];
 
   if (!apiKey) {
     throw new Error('CFMail: API key not configured. Set it in sidepanel settings.');
@@ -1298,18 +1304,35 @@ async function ensureCfmailMailbox(state) {
     await addLog('CFMail: JWT expired, creating new mailbox', 'warn');
   }
 
-  const domain = await getCfmailDomain(state);
-  const { email, jwt } = await cfmailCreateMailbox(apiHost, apiKey, domain);
-  await recordCfmailDomainSuccess(domain);
+  const maxAttempts = Math.max(1, domains.length || 0);
+  let lastError = null;
 
-  await setState({
-    email,
-    cfmailMailbox: { email, jwt, jwtCreatedAt: Date.now() },
-  });
-  broadcastDataUpdate({ email });
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const currentState = attempt === 1 ? state : await getState();
+    const domain = await getCfmailDomain(currentState);
 
-  await addLog(`CFMail: Created mailbox ${email} on domain ${domain}`, 'ok');
-  return { email, jwt };
+    try {
+      const { email, jwt } = await cfmailCreateMailbox(apiHost, apiKey, domain);
+      await recordCfmailDomainSuccess(domain);
+
+      await setState({
+        email,
+        cfmailMailbox: { email, jwt, jwtCreatedAt: Date.now() },
+      });
+      broadcastDataUpdate({ email });
+
+      await addLog(`CFMail: Created mailbox ${email} on domain ${domain}`, 'ok');
+      return { email, jwt };
+    } catch (err) {
+      lastError = err;
+      await recordCfmailDomainFailure(domain);
+
+      const level = attempt < maxAttempts ? 'warn' : 'error';
+      await addLog(`CFMail: mailbox creation failed on ${domain}: ${err.message}`, level);
+    }
+  }
+
+  throw lastError || new Error('CFMail: failed to create mailbox.');
 }
 
 async function pollCfmailCode(state, step) {
@@ -1325,15 +1348,8 @@ async function pollCfmailCode(state, step) {
     ? (state.lastEmailTimestamp || state.flowStartTime || 0)
     : (state.flowStartTime || 0);
 
-  // Track seen message IDs to avoid duplicates
-  const seenKey = `cfmailSeenMsgIds_step${step}`;
+  // Track seen message IDs only within the current poll invocation
   let seenMsgIds = new Set();
-  try {
-    const stored = await chrome.storage.session.get(seenKey);
-    if (Array.isArray(stored[seenKey])) {
-      seenMsgIds = new Set(stored[seenKey]);
-    }
-  } catch {}
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await sleepWithStop(intervalMs);
@@ -1357,6 +1373,13 @@ async function pollCfmailCode(state, step) {
       throw err;
     }
 
+    const expectedEmail = (currentState.email || mailbox.email || '').trim().toLowerCase();
+    await addLog(
+      `Step ${step}: CFMail diagnostics attempt ${attempt}/${maxAttempts} — ` +
+      buildCfmailDiagnostics(messages, expectedEmail),
+      'info'
+    );
+
     const senderFilters = step === 7
       ? ['openai', 'noreply', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward']
       : ['openai', 'noreply', 'verify', 'auth', 'duckduckgo', 'forward'];
@@ -1366,32 +1389,47 @@ async function pollCfmailCode(state, step) {
 
     for (const msg of messages) {
       const msgId = msg.id || `${msg.createdAt}-${msg.subject}`;
-      if (seenMsgIds.has(msgId)) continue;
+      const alreadySeen = seenMsgIds.has(msgId);
 
       // Filter by timestamp
-      const msgTime = msg.createdAt ? new Date(msg.createdAt).getTime() : 0;
-      if (filterAfterTimestamp && msgTime <= filterAfterTimestamp) continue;
+      const msgTime = extractCfmailTimestamp(msg);
+      const recentEnough = isCfmailMessageRecentEnough(msg, filterAfterTimestamp);
+
+      const recipient = getCfmailMessageRecipient(msg);
+      const recipientMatch = !(recipient && expectedEmail && recipient !== expectedEmail);
 
       // Combine text for filtering
-      const combinedText = [msg.subject, msg.from, msg.body || ''].filter(Boolean).join(' ');
+      const combinedText = buildCfmailMessageText(msg);
       const normalized = combinedText.toLowerCase();
 
       // Sender/subject relevance check
       const senderMatch = senderFilters.some(f => normalized.includes(f.toLowerCase()));
       const subjectMatch = subjectFilters.some(f => normalized.includes(f.toLowerCase()));
       const keywordMatch = /openai|chatgpt|verify|verification|confirm|login|验证码/.test(normalized);
-
-      if (!senderMatch && !subjectMatch && !keywordMatch) continue;
+      const relevant = senderMatch || subjectMatch || keywordMatch;
 
       // Extract code
       const code = extractCfmailCode(combinedText);
-      if (!code) continue;
+      const hasCode = Boolean(code);
+
+      const msgTimeLabel = msgTime ? new Date(msgTime).toISOString() : 'unknown';
+      const filterAfterLabel = filterAfterTimestamp ? new Date(filterAfterTimestamp).toISOString() : 'none';
+      await addLog(
+        `Step ${step}: CFMail candidate id=${String(msgId).slice(0, 60)} ` +
+        `seen=${alreadySeen ? 'yes' : 'no'} recent=${recentEnough ? 'yes' : 'no'} ` +
+        `recipient=${recipientMatch ? 'yes' : 'no'} relevant=${relevant ? 'yes' : 'no'} ` +
+        `code=${hasCode ? 'yes' : 'no'} msgTime=${msgTimeLabel} filterAfter=${filterAfterLabel}`,
+        'info'
+      );
+
+      if (alreadySeen) continue;
+      if (!recentEnough) continue;
+      if (!recipientMatch) continue;
+      if (!relevant) continue;
+      if (!hasCode) continue;
 
       // Found a valid code
       seenMsgIds.add(msgId);
-      try {
-        await chrome.storage.session.set({ [seenKey]: [...seenMsgIds] });
-      } catch {}
 
       await addLog(`Step ${step}: CFMail code found: ${code}`, 'ok');
       return { ok: true, code, emailTimestamp: msgTime || Date.now() };

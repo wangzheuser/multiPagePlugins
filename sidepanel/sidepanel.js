@@ -1,5 +1,7 @@
 // sidepanel/sidepanel.js — Side Panel logic
 
+const { shouldRequireManualEmail } = globalThis.MultiPageCfmailUtils;
+
 const STATUS_ICONS = {
   pending: '',
   running: '',
@@ -310,6 +312,14 @@ function syncPasswordToggleLabel() {
   btnTogglePassword.textContent = inputPassword.type === 'password' ? 'Show' : 'Hide';
 }
 
+function saveSetting(payload) {
+  return chrome.runtime.sendMessage({
+    type: 'SAVE_SETTING',
+    source: 'sidepanel',
+    payload,
+  });
+}
+
 // ============================================================
 // Button Handlers
 // ============================================================
@@ -317,7 +327,7 @@ function syncPasswordToggleLabel() {
 document.querySelectorAll('.step-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const step = Number(btn.dataset.step);
-    if (step === 3) {
+    if (step === 3 && shouldRequireManualEmail(selectMailProvider.value)) {
       const email = inputEmail.value.trim();
       if (!email) {
         showToast('Please paste email address or use Auto first', 'warn');
@@ -401,19 +411,12 @@ inputEmail.addEventListener('change', async () => {
   }
 });
 
-inputVpsUrl.addEventListener('change', async () => {
-  const vpsUrl = inputVpsUrl.value.trim();
-  if (vpsUrl) {
-    await chrome.runtime.sendMessage({ type: 'SAVE_SETTING', source: 'sidepanel', payload: { vpsUrl } });
-  }
+inputVpsUrl.addEventListener('input', async () => {
+  await saveSetting({ vpsUrl: inputVpsUrl.value.trim() });
 });
 
-inputPassword.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING',
-    source: 'sidepanel',
-    payload: { customPassword: inputPassword.value },
-  });
+inputPassword.addEventListener('input', async () => {
+  await saveSetting({ customPassword: inputPassword.value });
 });
 
 selectMailProvider.addEventListener('change', async () => {
@@ -423,51 +426,28 @@ selectMailProvider.addEventListener('change', async () => {
   if (selectMailProvider.value !== 'cfmail') {
     updates.cfmailApiKey = '';
   }
-  await chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING', source: 'sidepanel',
-    payload: updates,
-  });
+  await saveSetting(updates);
 });
 
-inputInbucketMailbox.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING',
-    source: 'sidepanel',
-    payload: { inbucketMailbox: inputInbucketMailbox.value.trim() },
-  });
+inputInbucketMailbox.addEventListener('input', async () => {
+  await saveSetting({ inbucketMailbox: inputInbucketMailbox.value.trim() });
 });
 
-inputInbucketHost.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING',
-    source: 'sidepanel',
-    payload: { inbucketHost: inputInbucketHost.value.trim() },
-  });
+inputInbucketHost.addEventListener('input', async () => {
+  await saveSetting({ inbucketHost: inputInbucketHost.value.trim() });
 });
 
 inputCfmailApiHost.addEventListener('input', () => {
-  chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING',
-    source: 'sidepanel',
-    payload: { cfmailApiHost: inputCfmailApiHost.value.trim() },
-  });
+  saveSetting({ cfmailApiHost: inputCfmailApiHost.value.trim() });
 });
 
 inputCfmailApiKey.addEventListener('input', () => {
-  chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING',
-    source: 'sidepanel',
-    payload: { cfmailApiKey: inputCfmailApiKey.value.trim() },
-  });
+  saveSetting({ cfmailApiKey: inputCfmailApiKey.value.trim() });
 });
 
 inputCfmailDomains.addEventListener('input', () => {
   const domains = inputCfmailDomains.value.trim().split('\n').map(d => d.trim()).filter(Boolean);
-  chrome.runtime.sendMessage({
-    type: 'SAVE_SETTING',
-    source: 'sidepanel',
-    payload: { cfmailDomains: domains },
-  });
+  saveSetting({ cfmailDomains: domains });
 });
 
 // ============================================================
