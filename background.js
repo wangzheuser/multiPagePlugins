@@ -1106,6 +1106,86 @@ function normalizeInbucketOrigin(rawValue) {
   }
 }
 
+// ============================================================
+// CFMail Provider — REST API helpers for mailbox creation & email polling
+// ============================================================
+
+const CFMAIL_DEFAULT_API_HOST = 'https://mailapi.wqp.de5.net';
+const CFMAIL_JWT_TTL_MS = 30 * 60 * 1000; // 30 minutes safety default
+const CFMAIL_DOMAIN_COOLDOWN_MS = 60 * 1000; // 60 seconds circuit breaker cooldown
+
+function getCfmailApiHost(state) {
+  return (state.cfmailApiHost || '').trim() || CFMAIL_DEFAULT_API_HOST;
+}
+
+function extractCfmailCode(text) {
+  // Pattern 1: OpenAI subject line
+  const m1 = text.match(/Subject:\s*Your ChatGPT code is\s*(\d{6})/i);
+  if (m1) return m1[1];
+
+  // Pattern 2: OpenAI email body
+  const m2 = text.match(/Your ChatGPT code is\s*(\d{6})/i);
+  if (m2) return m2[1];
+
+  // Pattern 3: Alternative body
+  const m3 = text.match(/temporary verification code to continue:\s*(\d{6})/i);
+  if (m3) return m3[1];
+
+  // Pattern 4: Generic fallback — last resort, may match any 6-digit number
+  const m4 = text.match(/(?<![#&])\b(\d{6})\b/);
+  if (m4) return m4[1];
+
+  return null;
+}
+
+async function cfmailCreateMailbox(apiHost, apiKey, domain) {
+  const local = `oc${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`;
+
+  const resp = await fetch(`${apiHost}/admin/new_address`, {
+    method: 'POST',
+    headers: {
+      'x-admin-auth': apiKey,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      enablePrefix: true,
+      name: local,
+      domain,
+    }),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    if (resp.status === 401) throw new Error('CFMail API key rejected');
+    throw new Error(`CFMail API error (${resp.status}): ${body.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  if (!data.address || !data.jwt) {
+    throw new Error(`CFMail API returned invalid response: missing address or jwt`);
+  }
+
+  return { email: data.address, jwt: data.jwt };
+}
+
+async function cfmailFetchMails(apiHost, jwt, limit = 10) {
+  const resp = await fetch(`${apiHost}/api/mails?limit=${limit}&offset=0`, {
+    headers: {
+      'Authorization': `Bearer ${jwt}`,
+      'Accept': 'application/json',
+    },
+  });
+
+  if (!resp.ok) {
+    if (resp.status === 401) throw new Error('CFMail JWT expired or invalid');
+    throw new Error(`CFMail fetch error (${resp.status})`);
+  }
+
+  const data = await resp.json();
+  return Array.isArray(data.results) ? data.results : [];
+}
+
 async function clickResendOnSignupPage(step) {
   const signupTabId = await getTabId('signup-page');
   if (!signupTabId) return;
