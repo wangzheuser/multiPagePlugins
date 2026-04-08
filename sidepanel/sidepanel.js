@@ -30,6 +30,12 @@ const rowInbucketHost = document.getElementById('row-inbucket-host');
 const inputInbucketHost = document.getElementById('input-inbucket-host');
 const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
 const inputInbucketMailbox = document.getElementById('input-inbucket-mailbox');
+const rowCfmailApiHost = document.getElementById('row-cfmail-api-host');
+const inputCfmailApiHost = document.getElementById('input-cfmail-api-host');
+const rowCfmailApiKey = document.getElementById('row-cfmail-api-key');
+const inputCfmailApiKey = document.getElementById('input-cfmail-api-key');
+const rowCfmailDomains = document.getElementById('row-cfmail-domains');
+const inputCfmailDomains = document.getElementById('input-cfmail-domains');
 const inputRunCount = document.getElementById('input-run-count');
 
 // ============================================================
@@ -96,6 +102,15 @@ async function restoreState() {
     if (state.inbucketMailbox) {
       inputInbucketMailbox.value = state.inbucketMailbox;
     }
+    if (state.cfmailApiHost) {
+      inputCfmailApiHost.value = state.cfmailApiHost;
+    }
+    if (state.cfmailApiKey) {
+      inputCfmailApiKey.value = state.cfmailApiKey;
+    }
+    if (Array.isArray(state.cfmailDomains)) {
+      inputCfmailDomains.value = state.cfmailDomains.join('\n');
+    }
 
     if (state.stepStatuses) {
       for (const [step, status] of Object.entries(state.stepStatuses)) {
@@ -122,9 +137,14 @@ function syncPasswordField(state) {
 }
 
 function updateMailProviderUI() {
-  const useInbucket = selectMailProvider.value === 'inbucket';
-  rowInbucketHost.style.display = useInbucket ? '' : 'none';
-  rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
+  const v = selectMailProvider.value;
+  rowInbucketHost.style.display = v === 'inbucket' ? '' : 'none';
+  rowInbucketMailbox.style.display = v === 'inbucket' ? '' : 'none';
+  rowCfmailApiHost.style.display = v === 'cfmail' ? '' : 'none';
+  rowCfmailApiKey.style.display = v === 'cfmail' ? '' : 'none';
+  rowCfmailDomains.style.display = v === 'cfmail' ? '' : 'none';
+  // Hide DuckDuckGo Auto button in cfmail mode (auto-creates emails)
+  btnFetchEmail.style.display = v === 'cfmail' ? 'none' : '';
 }
 
 // ============================================================
@@ -398,9 +418,14 @@ inputPassword.addEventListener('change', async () => {
 
 selectMailProvider.addEventListener('change', async () => {
   updateMailProviderUI();
+  const updates = { mailProvider: selectMailProvider.value };
+  // Clear cfmail API key when switching away from cfmail
+  if (selectMailProvider.value !== 'cfmail') {
+    updates.cfmailApiKey = '';
+  }
   await chrome.runtime.sendMessage({
     type: 'SAVE_SETTING', source: 'sidepanel',
-    payload: { mailProvider: selectMailProvider.value },
+    payload: updates,
   });
 });
 
@@ -417,6 +442,31 @@ inputInbucketHost.addEventListener('change', async () => {
     type: 'SAVE_SETTING',
     source: 'sidepanel',
     payload: { inbucketHost: inputInbucketHost.value.trim() },
+  });
+});
+
+inputCfmailApiHost.addEventListener('change', async () => {
+  await chrome.runtime.sendMessage({
+    type: 'SAVE_SETTING',
+    source: 'sidepanel',
+    payload: { cfmailApiHost: inputCfmailApiHost.value.trim() },
+  });
+});
+
+inputCfmailApiKey.addEventListener('change', async () => {
+  await chrome.runtime.sendMessage({
+    type: 'SAVE_SETTING',
+    source: 'sidepanel',
+    payload: { cfmailApiKey: inputCfmailApiKey.value.trim() },
+  });
+});
+
+inputCfmailDomains.addEventListener('change', async () => {
+  const domains = inputCfmailDomains.value.trim().split('\n').map(d => d.trim()).filter(Boolean);
+  await chrome.runtime.sendMessage({
+    type: 'SAVE_SETTING',
+    source: 'sidepanel',
+    payload: { cfmailDomains: domains },
   });
 });
 
