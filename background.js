@@ -1186,6 +1186,64 @@ async function cfmailFetchMails(apiHost, jwt, limit = 10) {
   return Array.isArray(data.results) ? data.results : [];
 }
 
+async function getCfmailDomain(state) {
+  const domains = Array.isArray(state.cfmailDomains) ? state.cfmailDomains.filter(Boolean) : [];
+  if (domains.length === 0) {
+    throw new Error('CFMail: no domains configured. Add domains in sidepanel settings.');
+  }
+  if (domains.length === 1) return domains[0];
+
+  const failures = state.cfmailDomainFailures || {};
+  const now = Date.now();
+  const index = state.cfmailDomainIndex || 0;
+
+  // Try each domain starting from current index, skip those in cooldown
+  for (let i = 0; i < domains.length; i++) {
+    const candidateIndex = (index + i) % domains.length;
+    const domain = domains[candidateIndex];
+    const failureTime = failures[domain];
+    if (!failureTime || (now - failureTime) > CFMAIL_DOMAIN_COOLDOWN_MS) {
+      return domain;
+    }
+  }
+
+  // All domains in cooldown — use the one with oldest failure
+  let oldestDomain = domains[0];
+  let oldestTime = Infinity;
+  for (const d of domains) {
+    const t = failures[d] || 0;
+    if (t < oldestTime) {
+      oldestTime = t;
+      oldestDomain = d;
+    }
+  }
+  await addLog('CFMail: all domains in cooldown, using oldest-failed: ' + oldestDomain, 'warn');
+  return oldestDomain;
+}
+
+async function recordCfmailDomainFailure(domain) {
+  const state = await getState();
+  const failures = { ...(state.cfmailDomainFailures || {}), [domain]: Date.now() };
+  await setState({ cfmailDomainFailures: failures });
+}
+
+async function recordCfmailDomainSuccess(domain) {
+  const state = await getState();
+  const domains = Array.isArray(state.cfmailDomains) ? state.cfmailDomains.filter(Boolean) : [];
+  if (domains.length <= 1) return;
+
+  const failures = { ...(state.cfmailDomainFailures || {}) };
+  delete failures[domain]; // Clear failure record on success
+
+  const currentIndex = state.cfmailDomainIndex || 0;
+  const nextIndex = (currentIndex + 1) % domains.length;
+
+  await setState({
+    cfmailDomainFailures: failures,
+    cfmailDomainIndex: nextIndex,
+  });
+}
+
 async function clickResendOnSignupPage(step) {
   const signupTabId = await getTabId('signup-page');
   if (!signupTabId) return;
