@@ -445,25 +445,25 @@ inputInbucketHost.addEventListener('change', async () => {
   });
 });
 
-inputCfmailApiHost.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({
+inputCfmailApiHost.addEventListener('input', () => {
+  chrome.runtime.sendMessage({
     type: 'SAVE_SETTING',
     source: 'sidepanel',
     payload: { cfmailApiHost: inputCfmailApiHost.value.trim() },
   });
 });
 
-inputCfmailApiKey.addEventListener('change', async () => {
-  await chrome.runtime.sendMessage({
+inputCfmailApiKey.addEventListener('input', () => {
+  chrome.runtime.sendMessage({
     type: 'SAVE_SETTING',
     source: 'sidepanel',
     payload: { cfmailApiKey: inputCfmailApiKey.value.trim() },
   });
 });
 
-inputCfmailDomains.addEventListener('change', async () => {
+inputCfmailDomains.addEventListener('input', () => {
   const domains = inputCfmailDomains.value.trim().split('\n').map(d => d.trim()).filter(Boolean);
-  await chrome.runtime.sendMessage({
+  chrome.runtime.sendMessage({
     type: 'SAVE_SETTING',
     source: 'sidepanel',
     payload: { cfmailDomains: domains },

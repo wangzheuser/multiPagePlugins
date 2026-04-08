@@ -127,6 +127,7 @@ async function resetState() {
     'inbucketHost',
     'inbucketMailbox',
     'cfmailApiHost',
+    'cfmailApiKey',
     'cfmailDomains',
   ]);
   await chrome.storage.session.clear();
@@ -142,6 +143,7 @@ async function resetState() {
     inbucketHost: prev.inbucketHost || '',
     inbucketMailbox: prev.inbucketMailbox || '',
     cfmailApiHost: prev.cfmailApiHost || '',
+    cfmailApiKey: prev.cfmailApiKey || '',
     cfmailDomains: prev.cfmailDomains || [],
   });
 }
@@ -891,6 +893,9 @@ async function autoRunLoop(totalRuns) {
       mailProvider: prevState.mailProvider,
       inbucketHost: prevState.inbucketHost,
       inbucketMailbox: prevState.inbucketMailbox,
+      cfmailApiHost: prevState.cfmailApiHost,
+      cfmailApiKey: prevState.cfmailApiKey,
+      cfmailDomains: prevState.cfmailDomains,
       autoRunning: true,
     };
     await resetState();
@@ -909,26 +914,32 @@ async function autoRunLoop(totalRuns) {
       await executeStepAndWait(1, 2000);
       await executeStepAndWait(2, 2000);
 
+      // Skip DuckDuckGo email fetch in cfmail mode — Step 3 auto-creates mailbox
+      const currentState = await getState();
+      const needsDuckEmail = currentState.mailProvider !== 'cfmail';
+
       let emailReady = false;
-      try {
-        const duckEmail = await fetchDuckEmail({ generateNew: true });
-        await addLog(`=== Run ${run}/${totalRuns} — Duck email ready: ${duckEmail} ===`, 'ok');
-        emailReady = true;
-      } catch (err) {
-        await addLog(`Duck Mail auto-fetch failed: ${err.message}`, 'warn');
-      }
+      if (needsDuckEmail) {
+        try {
+          const duckEmail = await fetchDuckEmail({ generateNew: true });
+          await addLog(`=== Run ${run}/${totalRuns} — Duck email ready: ${duckEmail} ===`, 'ok');
+          emailReady = true;
+        } catch (err) {
+          await addLog(`Duck Mail auto-fetch failed: ${err.message}`, 'warn');
+        }
 
-      if (!emailReady) {
-        await addLog(`=== Run ${run}/${totalRuns} PAUSED: Fetch Duck email or paste manually, then continue ===`, 'warn');
-        chrome.runtime.sendMessage(status('waiting_email')).catch(() => {});
+        if (!emailReady) {
+          await addLog(`=== Run ${run}/${totalRuns} PAUSED: Fetch Duck email or paste manually, then continue ===`, 'warn');
+          chrome.runtime.sendMessage(status('waiting_email')).catch(() => {});
 
-        // Wait for RESUME_AUTO_RUN — sets a promise that resumeAutoRun resolves
-        await waitForResume();
+          // Wait for RESUME_AUTO_RUN — sets a promise that resumeAutoRun resolves
+          await waitForResume();
 
-        const resumedState = await getState();
-        if (!resumedState.email) {
-          await addLog('Cannot resume: no email address.', 'error');
-          break;
+          const resumedState = await getState();
+          if (!resumedState.email) {
+            await addLog('Cannot resume: no email address.', 'error');
+            break;
+          }
         }
       }
 
