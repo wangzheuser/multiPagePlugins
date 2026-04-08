@@ -639,6 +639,9 @@ async function handleMessage(message, sender) {
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
       if (message.payload.inbucketMailbox !== undefined) updates.inbucketMailbox = message.payload.inbucketMailbox;
+      if (message.payload.cfmailApiHost !== undefined) updates.cfmailApiHost = message.payload.cfmailApiHost;
+      if (message.payload.cfmailApiKey !== undefined) updates.cfmailApiKey = message.payload.cfmailApiKey;
+      if (message.payload.cfmailDomains !== undefined) updates.cfmailDomains = message.payload.cfmailDomains;
       await setState(updates);
       return { ok: true };
     }
