@@ -1276,6 +1276,99 @@ async function ensureCfmailMailbox(state) {
   return { email, jwt };
 }
 
+async function pollCfmailCode(state, step) {
+  const maxAttempts = 20;
+  const intervalMs = 3000;
+
+  if (!state.cfmailMailbox || !state.cfmailMailbox.jwt) {
+    throw new Error('CFMail: no mailbox available. Ensure Step 3 completed successfully.');
+  }
+
+  const apiHost = getCfmailApiHost(state);
+  const filterAfterTimestamp = step === 7
+    ? (state.lastEmailTimestamp || state.flowStartTime || 0)
+    : (state.flowStartTime || 0);
+
+  // Track seen message IDs to avoid duplicates
+  const seenKey = `cfmailSeenMsgIds_step${step}`;
+  let seenMsgIds = new Set();
+  try {
+    const stored = await chrome.storage.session.get(seenKey);
+    if (Array.isArray(stored[seenKey])) {
+      seenMsgIds = new Set(stored[seenKey]);
+    }
+  } catch {}
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await sleepWithStop(intervalMs);
+
+    // Re-read mailbox from state each iteration (in case JWT was refreshed)
+    const currentState = await getState();
+    const mailbox = currentState.cfmailMailbox;
+    if (!mailbox || !mailbox.jwt) {
+      throw new Error('CFMail: mailbox disappeared during polling.');
+    }
+
+    let messages;
+    try {
+      messages = await cfmailFetchMails(apiHost, mailbox.jwt);
+    } catch (err) {
+      if (err.message.includes('JWT expired')) {
+        await addLog(`CFMail: JWT expired during Step ${step} polling, recreating mailbox`, 'warn');
+        await ensureCfmailMailbox(state);
+        continue; // Re-read mailbox on next iteration
+      }
+      throw err;
+    }
+
+    const senderFilters = step === 7
+      ? ['openai', 'noreply', 'verify', 'auth', 'chatgpt', 'duckduckgo', 'forward']
+      : ['openai', 'noreply', 'verify', 'auth', 'duckduckgo', 'forward'];
+    const subjectFilters = step === 7
+      ? ['verify', 'verification', 'code', '验证', 'confirm', 'login']
+      : ['verify', 'verification', 'code', '验证', 'confirm'];
+
+    for (const msg of messages) {
+      const msgId = msg.id || `${msg.createdAt}-${msg.subject}`;
+      if (seenMsgIds.has(msgId)) continue;
+
+      // Filter by timestamp
+      const msgTime = msg.createdAt ? new Date(msg.createdAt).getTime() : 0;
+      if (filterAfterTimestamp && msgTime <= filterAfterTimestamp) continue;
+
+      // Combine text for filtering
+      const combinedText = [msg.subject, msg.from, msg.body || ''].filter(Boolean).join(' ');
+      const normalized = combinedText.toLowerCase();
+
+      // Sender/subject relevance check
+      const senderMatch = senderFilters.some(f => normalized.includes(f.toLowerCase()));
+      const subjectMatch = subjectFilters.some(f => normalized.includes(f.toLowerCase()));
+      const keywordMatch = /openai|chatgpt|verify|verification|confirm|login|验证码/.test(normalized);
+
+      if (!senderMatch && !subjectMatch && !keywordMatch) continue;
+
+      // Extract code
+      const code = extractCfmailCode(combinedText);
+      if (!code) continue;
+
+      // Found a valid code
+      seenMsgIds.add(msgId);
+      try {
+        await chrome.storage.session.set({ [seenKey]: [...seenMsgIds] });
+      } catch {}
+
+      await addLog(`Step ${step}: CFMail code found: ${code}`, 'ok');
+      return { ok: true, code, emailTimestamp: msgTime || Date.now() };
+    }
+
+    if (attempt < maxAttempts) {
+      await addLog(`Step ${step}: CFMail polling attempt ${attempt}/${maxAttempts}`);
+    }
+  }
+
+  throw new Error(`No verification email found in CFMail after ${(maxAttempts * intervalMs / 1000).toFixed(0)}s.`);
+}
+
 async function clickResendOnSignupPage(step) {
   const signupTabId = await getTabId('signup-page');
   if (!signupTabId) return;
