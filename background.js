@@ -1039,6 +1039,25 @@ async function executeStep2(state) {
 // ============================================================
 
 async function executeStep3(state) {
+  // CFMail provider: auto-create mailbox before filling form
+  if (state.mailProvider === 'cfmail') {
+    const { email } = await ensureCfmailMailbox(state);
+    // ensureCfmailMailbox already sets state.email and broadcasts DATA_UPDATED
+    const password = state.customPassword || generatePassword();
+    await setPasswordState(password);
+    const accounts = state.accounts || [];
+    accounts.push({ email, password, createdAt: new Date().toISOString() });
+    await setState({ accounts });
+    await addLog(`Step 3: CFMail mailbox ${email}, password generated (${password.length} chars)`);
+    await sendToContentScript('signup-page', {
+      type: 'EXECUTE_STEP',
+      step: 3,
+      source: 'background',
+      payload: { email, password },
+    });
+    return;
+  }
+
   if (!state.email) {
     throw new Error('No email address. Paste email in Side Panel first.');
   }
