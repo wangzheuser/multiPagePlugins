@@ -122,6 +122,8 @@ async function resetState() {
     'mailProvider',
     'inbucketHost',
     'inbucketMailbox',
+    'cfmailApiHost',
+    'cfmailDomains',
   ]);
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
@@ -135,6 +137,8 @@ async function resetState() {
     mailProvider: prev.mailProvider || '163',
     inbucketHost: prev.inbucketHost || '',
     inbucketMailbox: prev.inbucketMailbox || '',
+    cfmailApiHost: prev.cfmailApiHost || '',
+    cfmailDomains: prev.cfmailDomains || [],
   });
 }
 
