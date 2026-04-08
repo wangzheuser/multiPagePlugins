@@ -88,7 +88,11 @@ async function initializeSessionStorageAccess() {
 }
 
 async function setState(updates) {
-  console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(updates).slice(0, 200));
+  const SENSITIVE_KEYS = ['cfmailApiKey', 'password', 'customPassword'];
+  const safeLog = Object.fromEntries(
+    Object.entries(updates).map(([k, v]) => [k, SENSITIVE_KEYS.includes(k) ? '***' : v])
+  );
+  console.log(LOG_PREFIX, 'storage.set:', JSON.stringify(safeLog).slice(0, 200));
   await chrome.storage.session.set(updates);
 }
 
@@ -1045,8 +1049,7 @@ async function executeStep3(state) {
     // ensureCfmailMailbox already sets state.email and broadcasts DATA_UPDATED
     const password = state.customPassword || generatePassword();
     await setPasswordState(password);
-    const accounts = state.accounts || [];
-    accounts.push({ email, password, createdAt: new Date().toISOString() });
+    const accounts = [...(state.accounts || []), { email, password, createdAt: new Date().toISOString() }];
     await setState({ accounts });
     await addLog(`Step 3: CFMail mailbox ${email}, password generated (${password.length} chars)`);
     await sendToContentScript('signup-page', {
@@ -1337,7 +1340,7 @@ async function pollCfmailCode(state, step) {
     } catch (err) {
       if (err.message.includes('JWT expired')) {
         await addLog(`CFMail: JWT expired during Step ${step} polling, recreating mailbox`, 'warn');
-        await ensureCfmailMailbox(state);
+        await ensureCfmailMailbox(currentState);
         continue; // Re-read mailbox on next iteration
       }
       throw err;
@@ -1412,7 +1415,7 @@ async function executeStep4Or7ViaCfmail(state, step) {
       payload: { code: result.code },
     });
   } else {
-    throw new Error('Signup page tab was closed. Cannot fill verification code.');
+    throw new Error(`${step === 7 ? 'Auth' : 'Signup'} page tab was closed. Cannot fill verification code.`);
   }
 }
 
