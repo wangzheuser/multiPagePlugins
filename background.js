@@ -1108,6 +1108,9 @@ function getMailConfig(state) {
       injectSource: 'inbucket-mail',
     };
   }
+  if (provider === 'cfmail') {
+    return { source: 'cfmail', label: 'CFMail', isApi: true };
+  }
   return { source: 'qq-mail', url: 'https://wx.mail.qq.com/', label: 'QQ Mail' };
 }
 
